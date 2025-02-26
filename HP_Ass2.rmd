@@ -1,0 +1,197 @@
+---
+title: "Wine Features"
+author: "Hannah S.K. Pahama"
+date: "February 2025"
+output: html_document
+---
+```
+
+# Abstract
+This contains my assignment for features mainly about carret.
+
+## Step Up Code
+
+```{r setup, message=TRUE, warning=TRUE}
+library(tidyverse)
+library(caret)
+library(fastDummies)
+
+wine <- readRDS(gzcon(url("https://github.com/cd-public/D505/raw/master/dat/wine.rds")))
+```
+
+Explanation:
+tidyverse - load tidyverse for data manipulation and visualization
+caret - for machine learning functionalities
+fastDummies - for creating dummy variables if needed
+wine - loads the wine ds from web GitHub
+
+
+# Feature Engineering
+
+We begin by engineering a number of features.
+
+- Create a total of 10 features (including points).
+- Remove all rows with a missing value.
+- Ensure only `log(price)` and engineering features are the only columns that remain in the `wino` dataframe.
+
+    ## But before everything (Data Cleaning)
+        ### 1. **Check Column Names**
+        ```r
+        print(colnames(wine))
+        ```
+
+        ### 2. **Check for Missing Values**
+        ```r
+        sum(is.na(wine))
+        colSums(is.na(wine))
+        ```
+
+        ### 3. **Drop Columns with Too Many Missing Values**
+        ```r
+        wine_clean <- wine %>% select(-designation, -region_2)
+        ```
+
+        ### 4. **Drop Rows with NAs in Key Columns**
+        ```r
+        wine_clean <- wine_clean %>% drop_na(country, province, region_1)
+        ```
+
+        ### 5. **Double-check for Missing Values**
+        ```r
+        colSums(is.na(wine_clean))
+        ```
+
+        ### 6. **Drop Unnecessary Column**
+        ```r
+        wine_clean <- wine_clean %>% select(-taster_twitter_handle)
+        ```
+
+        ### 7. **Final Check for Missing Values**
+        ```r
+        colSums(is.na(wine_clean))
+        ```
+
+
+```{r feature-engineering}
+wine_clean <- wine_clean %>%
+  mutate(
+    log_price = log(price),
+    points_squared = points^2,
+    price_per_point = price / points,
+    price_per_year = price / (2025 - year),
+    points_price_ratio = points / price,
+    is_expensive = ifelse(price > 50, 1, 0),  # 1 for expensive, 0 for cheap
+    wine_age = 2025 - year,
+    description_length = nchar(description),
+    variety_type = ifelse(variety %in% c("Cabernet Sauvignon", 
+                                         "Merlot", 
+                                         "Pinot Noir"), 
+                          "Red", 
+                          "Other"),
+    country_region = paste(country, 
+                           province, 
+                           sep = "_")
+  )
+
+# Keep only the relevant columns
+wino <- wine_clean %>%
+  select(log_price, 
+         points_squared, 
+         price_per_point, 
+         price_per_year, 
+         points_price_ratio, 
+         is_expensive, 
+         wine_age, 
+         description_length, 
+         variety_type, 
+         country_region)
+
+# Check the new dataset
+head(wino)
+```
+
+# Caret
+
+We now use a train/test split to evaluate the features.
+
+1. Use the Caret library to partition the `wino` dataframe into an 80/20 split.
+```{r}
+# Load the necessary libraries
+library(caret)
+
+# Step 1: Split the data into 80/20 train/test
+set.seed(123)  # Set seed for reproducibility
+train_index <- createDataPartition(wino$log_price, 
+                                   p = 0.8, 
+                                   list = FALSE)  # Partition based on log_price (or any target variable)
+train_data <- wino[train_index, ]
+test_data <- wino[-train_index, ]
+
+# Check dimensions of the train and test sets
+dim(train_data)  # Should show 80% of the rows
+dim(test_data)   # Should show 20% of the rows
+
+# Verify the split proportion
+nrow(train_data) / nrow(wino)  # Should be ~0.8
+nrow(test_data) / nrow(wino)   # Should be ~0.2
+```
+
+2. Run a linear regression with bootstrap resampling.
+```{r}
+# We use caret's train function to specify resampling method
+train_control <- trainControl(method = "boot", # Bootstrap resampling
+                              number = 100)    # Number of resampling iterations
+
+model <- train(log_price ~ .,  # Predict log_price based on all features
+               data = train_data, 
+               method = "lm", 
+               trControl = train_control)
+
+# View the model details and check the results
+summary(model)
+
+# Check resampling results (e.g., RMSE for each iteration)
+model$results
+```
+
+3. Report RMSE on the test partition of the data.
+```{r}
+# Predict on the test set
+predictions <- predict(model, newdata = test_data)
+
+# Calculate RMSE on test data
+rmse <- sqrt(mean((predictions - test_data$log_price)^2))
+print(paste("RMSE on the test data:", round(rmse, 2)))
+```
+    ### Model Performance Summary:
+
+    - RMSE (Resampling): 0.11897 — Low, indicating good fit.
+    - R-squared (Resampling): 0.9664 — Explains 96.64% of the variance, excellent!
+    - MAE (Resampling): 0.0771 — Low error on average.
+    - RMSE on Test Data: 0.1123 — Slightly lower than resampling, showing strong generalization.
+
+    Conclusion: The model performs well with minimal error, high R-squared, and good consistency across resampling iterations. Great job!
+
+# Variable Selection
+
+We now graph the importance of your 10 features.
+```{r}
+# Get the importance of features
+importance <- varImp(model, scale = FALSE)
+
+# Print the top 10 important features
+top_10_features <- importance$importance %>%
+  arrange(desc(Overall)) %>%
+  head(10)
+
+print(top_10_features)
+
+# Visualize the top 10 important features
+ggplot(top_10_features, aes(x = reorder(rownames(top_10_features), Overall), y = Overall)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() + 
+  labs(title = "Top 10 Important Features", 
+       x = "Features", 
+       y = "Importance (Overall)") +
+  theme_minimal()
+```
